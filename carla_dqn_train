@@ -35,7 +35,7 @@ MINIBATCH_SIZE = 16
 PREDICTION_BATCH_SIZE = 1
 TRAINING_BATCH_SIZE = MINIBATCH_SIZE // 4
 UPDATE_TARGET_EVERY = 4
-MODEL_NAME = "Xception" # Change later
+MODEL_NAME = "Xception"
 
 MEMORY_FRACTION = 0.8
 MIN_REWARD = -200
@@ -49,53 +49,44 @@ MIN_EPSILON = 0.001
 
 AGGREGATE_STATS_EVERY = 10
 
-# Own Tensorboard class
 class ModifiedTensorBoard(TensorBoard):
-
-    # Overriding init to set initial step and writer (we want one log file for all .fit() calls)
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.step = 1
+    def __init__(self, log_dir, **kwargs):
+        super().__init__(log_dir=log_dir, write_graph=False, update_freq="epoch", **kwargs)
+        self.step = 0
+        self.buffer = {}
         self.writer = tf.summary.create_file_writer(self.log_dir)
-
-    # Overriding this method to stop creating default log writer
+    
     def set_model(self, model):
         pass
 
-    # Overrided, saves logs with our step number
-    # (otherwise every .fit() will start writing from 0th step)
     def on_epoch_end(self, epoch, logs=None):
-        self.update_stats(**logs)
+        super().on_epoch_end(epoch, logs)
+
+        if self.buffer:
+            with self.writer.as_default():
+                for name, value in self.buffer.items():
+                    tf.summary.scalar(name, value, step=self.step)
+            self.writer.flush()
+            self.buffer.clear()
+
+        self.step += 1
 
     # Overrided
-    # We train for one batch only, no need to save anything at epoch end
     def on_batch_end(self, batch, logs=None):
         pass
 
-    # Overrided, so won't close writer
-    def on_train_end(self, _):
-        pass
+    def on_train_end(self, logs=None):
+        self.writer.flush()
 
-    # Custom method for saving own metrics
-    # Creates writer, writes custom metrics and closes writer
     def update_stats(self, **stats):
-        self._write_logs(stats, self.step)
+        self.buffer.update(stats)
 
-    def _write_logs(self, logs, index):
-        with self.writer.as_default():
-            for name, value in logs.items():
-                tf.summary.scalar(name, value, step=index)
-                self.step += 1
-                self.writer.flush()
     
 
-# Environment
 class CarEnv:
-    # Initial values
     SHOW_CAM = SHOW_PREVIEW
-    STEER_AMT = 0.25 # steer amount, [-1, 1]
-    # Actions: throttle, steer
-    ACTIONS = [(1.0, -0.25), (1.0, 0.0), (1.0, 0.25)]
+    STEER_AMT = 0.25
+    ACTIONS = [(1.0, 0.0), (1.0, -0.25), (1.0, 0.25)]
     im_width = IM_WIDTH
     im_height = IM_HEIGHT
     front_camera = None
@@ -150,12 +141,6 @@ class CarEnv:
         # Action Detecting
         thr, steer = self.ACTIONS[action]
         self.vehicle.apply_control(carla.VehicleControl(throttle=thr, steer=steer))
-        # if action == 0: # Left
-        #     self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=(-1)*self.STEER_AMT))
-        # elif action == 1: # Straight
-        #     self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=0))
-        # elif action == 2: # Right
-        #     self.vehicle.apply_control(carla.VehicleControl(throttle=1.0, steer=1*self.STEER_AMT))
 
         # Velocity setting
         v = self.vehicle.get_velocity()
@@ -171,21 +156,15 @@ class CarEnv:
         heading = self.vehicle.get_transform().get_forward_vector()
         angle_err = math.degrees(
             math.acos(np.clip(np.dot([lane_vec.x, lane_vec.y, lane_vec.z],
-                                     [heading.x, heading.y, heading.x]), -1.0, 1.0)))
-        
-        lat_err = self.vehicle.get_location().distance(wp.transform.location)
+                                     [heading.x, heading.y, heading.z]), -1.0, 1.0)))
 
-        reward = (kmh/10) - 0.5*angle_err - 3.0*lat_err
+        lat_err = self.vehicle.get_location().distance(wp.transform.location)
+        angle_norm = abs(angle_err / 90)
+
+        reward = (kmh/15) - 1.2 * angle_norm - 3.0 * lat_err
         done = len(self.collision_hist) > 0
-        # if len(self.collision_hist) != 0: # Crashing
-        #     done = True
-        #     reward = -200
-        # elif kmh < 60: # Low Speed
-        #     done = False
-        #     reward = -1
-        # else: # Default
-        #     done = False
-        #     reward = 1
+        if done:
+            reward -= 200
         
         if self.episode_start + SECOND_PER_EPISODE < time.time():
             done = True
@@ -220,7 +199,6 @@ class DQNagent():
         self.tensorboard = ModifiedTensorBoard(log_dir=f"logs/{MODEL_NAME}-{int(time.time())}")
 
         self.target_update_counter = 0
-        # self.graph = tf.compat.v1.get_default_graph()
 
         self.terminate = False
         self.last_logged_episode = 0
@@ -228,14 +206,14 @@ class DQNagent():
         self.training_initialized = False
 
     def create_model(self):
-        base_model = Xception(weights=None, include_top=False, input_shape=(IM_HEIGHT, IM_WIDTH,3))
+        base_model = Xception(weights=None, include_top=False, input_shape=(IM_HEIGHT, IM_WIDTH, 3))
 
         x = base_model.output
         x = GlobalAveragePooling2D()(x)
 
         predictions = Dense(3, activation="linear")(x)
         model = Model(inputs = base_model.input, outputs = predictions)
-        model.compile(loss="mse", optimizer=Adam(learning_rate=0.001), metrics=["accuracy"], run_eagerly=False)
+        model.compile(loss="mse", optimizer=Adam(learning_rate=0.001), metrics=["mae"], run_eagerly=False)
 
         return model
 
@@ -283,20 +261,10 @@ class DQNagent():
         self.model.fit(X, y,
                     batch_size=TRAINING_BATCH_SIZE,
                     verbose=0,
-                    callbacks=[self.tensorboard] if log else None)
+                    callbacks=[self.tensorboard] #if log else None
+        )
 
         self.target_update_counter += 1
-        
-        # log_this_step = False
-        # if self.tensorboard.step > self.last_logged_episode:
-        #     log_this_step = True
-        #     self.last_logged_episode = self.tensorboard.step 
-
-        # with self.graph.as_default():
-        #     self.model.fit(np.arange(X)/255, np.array(y), batch_size=TRAINING_BATCH_SIZE, verbose=0, shuffle=False, callbacks=[self.tensorboard] if log_this_step else None)
-
-        # if log_this_step:
-        #     self.target_update_counter += 1
 
         if self.target_update_counter > UPDATE_TARGET_EVERY:
             self.target_model.set_weights(self.model.get_weights())
@@ -308,7 +276,6 @@ class DQNagent():
     def train_in_loop(self):
         X = np.random.uniform(size=(1, IM_HEIGHT, IM_WIDTH, 3)).astype(np.float32)
         y = np.random.uniform(size=(1, 3)).astype(np.float32)
-        # with self.graph.as_default():
         self.model.fit(X, y, verbose=False, batch_size=1)
 
         self.training_initialized = True
@@ -321,12 +288,15 @@ class DQNagent():
 
 if __name__ == "__main__":
     FPS = 10
+    # For stats
     ep_rewards = [-200]
 
+    # For more repetitive results
     random.seed(1)
     np.random.seed(1)
     tf.random.set_seed(1)
 
+    # Memory fraction, used mostly when training multiple agents
     gpu_options = tf.compat.v1.GPUOptions(per_process_gpu_memory_fraction=MEMORY_FRACTION)
     # GPU Memory Setting (Replacing Session)
     gpus = tf.config.list_physical_devices("GPU")
@@ -336,34 +306,39 @@ if __name__ == "__main__":
                 tf.config.experimental.set_memory_growth(gpu, True)
         except Exception as e:
             assert(f"[WARN] set_memory_growth failed: {e}")
-    # backend.set_session(tf.compat.v1.Session(config=tf.compat.v1.ConfigProto(gpu_options=gpu_options)))
-
+    
+    # Create models folder
     if not os.path.isdir("models"):
         os.makedirs("models")
     
+    # Create agent and environment
     agent = DQNagent()
     env = CarEnv()
 
+    # Start training thread and wait for training ti be initialized
     trainer_thread = Thread(target=agent.train_in_loop, daemon=True)
     trainer_thread.start()
-
     while not agent.training_initialized:
         time.sleep(0.01)
 
+    # Initialize predictions - forst prediction takes longer as of initialization that has to be done
+    # It's better to do a first prediction then before we start iterating over episode steps
     agent.get_qs(np.ones((env.im_height, env.im_width, 3)))
 
+    # Iterate over episodes
     for episode in tqdm(range(1, EPISODE + 1), ascii=True, unit='episodes'):
         env.collision_hist = []
+        # Update tensorboard step every episode
         agent.tensorboard.step = episode
-
+        # Restarting episode - reset episode reward and step number
         episode_reward = 0
         step = 1
-
+        # Reset environment and get initial state
         current_state = env.reset()
-
+        # Reset flag and start iterating until episode ends
         done = False
         episode_start = time.time()
-
+        # Play for given number of seconds only
         while True:
             # Exploitation
             if np.random.random() > epsilon:
@@ -377,9 +352,9 @@ if __name__ == "__main__":
                 time.sleep(1/FPS)
 
             new_state, reward, done, _ = env.step(action)
-
+            # Transform new continous state to new discrete state and count reward
             episode_reward += reward
-
+            # Every step we update replay memory
             agent.update_replay_memory((current_state, action, reward, new_state, done))
 
             current_state = new_state
@@ -387,7 +362,8 @@ if __name__ == "__main__":
 
             if done:
                 break
-
+        
+        # End of episode - destroy agents
         for actor in env.actor_list:
             actor.destroy()
         
@@ -401,21 +377,15 @@ if __name__ == "__main__":
 
             # Save model, but only when min reward is greater or equal a set value
             if min_reward >= MIN_REWARD:
-                agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+                agent.model.save(f'models/{MODEL_NAME}__{int(time.time())}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min.model')
 
         # Decay epsilon
         if epsilon > MIN_EPSILON:
             epsilon *= epsilon_decay
             epsilon = max(MIN_EPSILON, epsilon)
 
+    # Set termination flag for training thread and wait for it to finish
     agent.terminate = True
     trainer_thread.join()
-    agent.model.save(f'models/{MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+    agent.model.save(f'models/{MODEL_NAME}__{int(time.time())}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min.model')
 
-
-
-
-
-
-            
-        
