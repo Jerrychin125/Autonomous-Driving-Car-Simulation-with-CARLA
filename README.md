@@ -12,15 +12,23 @@
     - Speed-based reward: r = (v_kmh − 60) × 0.2, plus a −200 penalty for any collision.
 
 3. some instructions
-    - python -m venv .venv
-    source .venv/bin/activate   # Linux / macOS
-    pip install -r requirements.txt
 
-    - ./CarlaUE4.sh -RenderOffScreen -quality-level=Epic -world-port=3000 #Linux
+    - environment 
+        python -m venv .venv
+        source .venv/bin/activate   # Linux / macOS
+        pip install -r requirements.txt
 
-    - python carla_dqn_train.py
-        - (Checkpoints are saved to models/ whenever the worst reward over the last 10 episodes ≥ −200.)
+    - running the simulator 
+        .\CarlaUE4.exe -carla-rpc-port=3000 `
+                -quality-level=Epic `
+                -ResX=1280 -ResY=720 -windowed
 
-    - tensorboard --logdir logs
+    - training
+        py -3.7 carla_dqn_train.py
+            - (Checkpoints are saved to models/ whenever the worst reward over the last 10 episodes ≥ −200.)
 
-    - python play_model.py --model-path models/your_checkpoint.model
+    - TensorBoard
+        tensorboard --logdir logs
+
+    -  Playing a Model
+        py -3.7 play_model.py --model-path models\your_checkpoint.model
