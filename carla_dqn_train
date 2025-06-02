@@ -40,7 +40,7 @@ MODEL_NAME = "Xception"
 MEMORY_FRACTION = 0.8
 MIN_REWARD = -200
 
-EPISODE = 100 # Too few 
+EPISODE = 5_000 # Too few 
 
 DISCOUNT = 0.99
 epsilon = 1
@@ -49,39 +49,30 @@ MIN_EPSILON = 0.001
 
 AGGREGATE_STATS_EVERY = 10
 
-class ModifiedTensorBoard(TensorBoard):
-    def __init__(self, log_dir, **kwargs):
-        super().__init__(log_dir=log_dir, write_graph=False, update_freq="epoch", **kwargs)
-        self.step = 0
-        self.buffer = {}
-        self.writer = tf.summary.create_file_writer(self.log_dir)
-    
-    def set_model(self, model):
-        pass
+class ModifiedTensorBoard(tf.keras.callbacks.Callback):
+    def __init__(self, log_dir):
+        super().__init__()
+        self.log_dir = log_dir
+        self.writer = tf.summary.create_file_writer(log_dir)
+        self.step   = 0
 
-    def on_epoch_end(self, epoch, logs=None):
-        super().on_epoch_end(epoch, logs)
-
-        if self.buffer:
-            with self.writer.as_default():
-                for name, value in self.buffer.items():
-                    tf.summary.scalar(name, value, step=self.step)
-            self.writer.flush()
-            self.buffer.clear()
-
+    # === Keras 內部訓練 ===
+    def on_train_batch_end(self, batch, logs=None):
         self.step += 1
+        if not logs:      # logs={'loss':..., 'mae':...}
+            return
+        with self.writer.as_default():
+            for k, v in logs.items():
+                tf.summary.scalar(k, v, step=self.step)
+            self.writer.flush()
 
-    # Overrided
-    def on_batch_end(self, batch, logs=None):
-        pass
-
-    def on_train_end(self, logs=None):
-        self.writer.flush()
-
+    # === 自訂統計量 ===
     def update_stats(self, **stats):
-        self.buffer.update(stats)
+        with self.writer.as_default():
+            for k, v in stats.items():
+                tf.summary.scalar(k, v, step=self.step)
+            self.writer.flush()
 
-    
 
 class CarEnv:
     SHOW_CAM = SHOW_PREVIEW
@@ -213,7 +204,10 @@ class DQNagent():
 
         predictions = Dense(3, activation="linear")(x)
         model = Model(inputs = base_model.input, outputs = predictions)
-        model.compile(loss="mse", optimizer=Adam(learning_rate=0.001), metrics=["mae"], run_eagerly=False)
+        model.compile(loss="mse", 
+                      optimizer=Adam(learning_rate=0.001), 
+                      metrics=["accuracy"], 
+                      run_eagerly=False)
 
         return model
 
@@ -261,7 +255,7 @@ class DQNagent():
         self.model.fit(X, y,
                     batch_size=TRAINING_BATCH_SIZE,
                     verbose=0,
-                    callbacks=[self.tensorboard] #if log else None
+                    callbacks=[self.tensorboard] if log else None
         )
 
         self.target_update_counter += 1
