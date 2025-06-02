@@ -34,7 +34,8 @@ Modern autonomous-driving stacks通常結合多重感測器、地圖與規則型
 ## Instructions
 
 #### Setting Environment 
-Build virtual python environment (strictly python3.7),
+Build virtual python environment (strictly python3.7)
+
 :: build venv
 ```py -3.7 -m venv .venv```
 
