@@ -2,7 +2,6 @@
 
 An end-to-end Deep Q-Learning pipeline that teaches a Tesla Model 3 to drive inside the CARLA simulator.
 
----
 
 ## Abstract
 Modern autonomous-driving stacks通常結合多重感測器、地圖與規則型規劃（rule-based planning）。  
@@ -18,14 +17,12 @@ Modern autonomous-driving stacks通常結合多重感測器、地圖與規則型
 * **結果**　約 1 k episodes、4 h (RTX 3060) 後，平均可於 10 s 內保持 58 ~ 62 km/h 且零碰撞  
 * **特色**　採用背景執行緒非同步更新，最大化 CARLA server 使用率
 
----
 
 ## Project goals
 * **End-to-end learning**：640 × 480 RGB → 8 種離散控制動作  
 * **Learned, not scripted**：完全由 reward 信號 (速度 + 碰撞) 引導，沒有 way-points 或 rule-based planner  
 * **Asynchronous training**：主執行緒收集資料，背景執行緒持續 `model.fit()`，使 simulator 100 % 忙碌
 
----
 
 ## Key features
 * **Replay buffer**：20 000 transitions，累積 5 000 後開始更新  
@@ -35,18 +32,22 @@ Modern autonomous-driving stacks通常結合多重感測器、地圖與規則型
 
 
 ## Instructions
----
 
 #### Setting Environment 
 Build virtual python environment (strictly python3.7),
+:: build venv
 ```py -3.7 -m venv .venv```
-```.\.venv\Scripts\activate```
-```source .venv/bin/activate```   # Windows
+
+:: command prompt
+```.\.venv\Scripts\activate.bat```
+
+:: or activate powershell
+```.\.venv\Scripts\Activate.ps1```
+
+:: install requirements
 ```pip install -r requirements.txt```
-
-
 #### Running Simulator
-```running the simulator .\CarlaUE4.exe -carla-rpc-port=3000 -quality-level=Epic -ResX=1280 -ResY=720 -windowed```
+```running the simulator .\CarlaUE4.exe -carla-rpc-port=3000```
 
 #### Training
 Checkpoints are saved to models/ whenever the worst reward over the last 10 episodes ≥ −200.
@@ -54,10 +55,10 @@ Checkpoints are saved to models/ whenever the worst reward over the last 10 epis
 
 
 ### TensorBoard
-```tensorboard --logdir logs```
+```tensorboard --logdir logs/ --port=6006```
 
 ### Playing a Model
-```py -3.7 play_model.py --model-path models\your_checkpoint.model```
+```py -3.7 play_model.py```
 
 ### Plot
-```py -3.7 plot_metrics.py reward.csv loss.csv```
+```py -3.7 plot_metrics.py```
